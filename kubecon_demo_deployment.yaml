@@ -16,5 +16,5 @@ spec:
     spec:
       containers:
       - name: kubecon-demo-ctr
-        image: alena1108/kubecon:v0.7.0
+        image: busybox
         imagePullPolicy: Always

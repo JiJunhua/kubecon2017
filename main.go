@@ -1,17 +1,16 @@
 package main
 
 import (
+	"context"
 	"os"
-
 	"time"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/dustin/go-humanize"
+	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	coreV1 "k8s.io/api/core/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
-	api "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -41,7 +40,7 @@ func main() {
 			logrus.Error(err)
 			return err
 		}
-		go pollNodes()
+		go pullNodes()
 		watchNodes()
 		for {
 			time.Sleep(5 * time.Second)
@@ -53,11 +52,10 @@ func main() {
 func watchNodes() {
 	imageCapacity = make(map[string]int64)
 	//Regular informer example
-	watchList := cache.NewListWatchFromClient(clientset.Core().RESTClient(), "nodes", v1.NamespaceAll,
-		fields.Everything())
+	watchList := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "nodes", "default", fields.Everything())
 	store, controller = cache.NewInformer(
 		watchList,
-		&api.Node{},
+		&coreV1.Node{},
 		time.Second*30,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc:    handleNodeAdd,
@@ -71,7 +69,7 @@ func watchNodes() {
 	// Shared informer example
 	informer := cache.NewSharedIndexInformer(
 		watchList,
-		&api.Node{},
+		&coreV1.Node{},
 		time.Second*10,
 		cache.Indexers{},
 	)
@@ -89,7 +87,7 @@ func watchNodes() {
 }
 
 func handleNodeAdd(obj interface{}) {
-	node := obj.(*api.Node)
+	node := obj.(*coreV1.Node)
 	logrus.Infof("Node [%s] is added; checking resources...", node.Name)
 	checkImageStorage(node)
 }
@@ -101,13 +99,15 @@ func handleNodeUpdate(old, current interface{}) {
 		logrus.Debugf("Found the node [%v] in cache", nodeInterface)
 	}
 
-	node := current.(*api.Node)
+	node := current.(*coreV1.Node)
 	checkImageStorage(node)
 }
 
-func pollNodes() error {
+func pullNodes() error {
 	for {
-		nodes, err := clientset.Core().Nodes().List(v1.ListOptions{FieldSelector: "metadata.name=minikube"})
+		//nodes, err := clientset.CoreV1().Nodes().List(context.Background(), v1.ListOptions{FieldSelector: "metadata.name=minikube"})
+		// list all nodes
+		nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), v1.ListOptions{})
 		if err != nil {
 			logrus.Warnf("Failed to poll the nodes: %v", err)
 			continue
@@ -115,14 +115,14 @@ func pollNodes() error {
 		if len(nodes.Items) > 0 {
 			node := nodes.Items[0]
 			node.Annotations["checked"] = "true"
-			_, err := clientset.Core().Nodes().Update(&node)
+			_, err := clientset.CoreV1().Nodes().Update(context.TODO(), &node, v1.UpdateOptions{})
 			if err != nil {
 				logrus.Warnf("Failed to update the node: %v", err)
 				continue
 			}
 			// // Node removal example
 			// gracePeriod := int64(10)
-			// err = clientset.Core().Nodes().Delete(updatedNode.Name,
+			// err = clientset.CoreV1().Nodes().Delete(updatedNode.Name,
 			// 	&v1.DeleteOptions{GracePeriodSeconds: &gracePeriod})
 		}
 		for _, node := range nodes.Items {
@@ -132,7 +132,7 @@ func pollNodes() error {
 	}
 }
 
-func checkImageStorage(node *api.Node) {
+func checkImageStorage(node *coreV1.Node) {
 	var storage int64
 	for _, image := range node.Status.Images {
 		storage = storage + image.SizeBytes
@@ -145,7 +145,7 @@ func checkImageStorage(node *api.Node) {
 	}
 	if changed {
 		logrus.Infof("Node [%s] storage occupied by images changed. Old value: [%v], new value: [%v]", node.Name,
-			humanize.Bytes(uint64(imageCapacity[node.Name])), humanize.Bytes(uint64(storage)))
+			uint64(imageCapacity[node.Name]), uint64(storage))
 		imageCapacity[node.Name] = storage
 	} else {
 		logrus.Infof("No changes in node [%s] storage occupied by images", node.Name)
